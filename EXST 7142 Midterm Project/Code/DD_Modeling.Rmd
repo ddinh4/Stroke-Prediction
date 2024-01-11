@@ -1,0 +1,385 @@
+---
+title: "Midterm Project  EXST 7141"
+author: "Dina Dinh"
+date: '2023-10-19'
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+```
+
+Packages
+```{r}
+library(tidyverse)
+library(boot)
+library(randomForest)
+library(psych)
+library(AUC)
+```
+```{r}
+data <- read.csv("../Data/Raw/healthcare-dataset-stroke-data.csv")
+
+data <- data %>%
+                  drop_na()  %>% 
+                  select(!(id)) %>%
+                  mutate(gender = as.factor(gender)) %>%
+                  mutate(Residence_type = recode(Residence_type,"Urban"= "1","Rural" ="0"))%>% 
+                  mutate(Residence_type = as.factor(Residence_type)) %>%
+                  mutate(ever_married = recode(ever_married, "Yes"="1","No"="0"))%>%
+                  mutate(ever_married = as.factor(ever_married))%>%
+                  mutate(work_type = as.factor(work_type)) %>%
+                  mutate(smoking_status = as.factor(smoking_status))%>%
+                  mutate(heart_disease = as.factor(heart_disease))%>%
+                  mutate(hypertension = as.factor(hypertension))%>%
+                  mutate(stroke = as.factor(stroke))
+                  
+data<- data[data$gender != "Other", ]
+
+data$gender <- droplevels(data$gender)
+
+```
+
+Importing and Cleaning Data **Dont run**
+```{r}
+data <- read.csv("../Data/Processed/new_healthcare.csv")
+data <- data %>%
+                  mutate(gender = as.factor(gender)) %>%
+                  mutate(Residence_type = as.factor(Residence_type)) %>%
+                  mutate(ever_married = as.factor(ever_married))%>%
+                  mutate(work_type = as.factor(work_type)) %>%
+                  mutate(smoking_status = as.factor(smoking_status))%>%
+                  mutate(heart_disease = as.factor(heart_disease))%>%
+                  mutate(hypertension = as.factor(hypertension))%>%
+                  mutate(stroke = as.factor(stroke))
+str(data)
+```
+None of the categorical data has high levels for further evaluation.
+
+Analyzing dataset
+```{r}
+cor(data[sapply(data,is.numeric)],use = "pairwise.complete.obs")
+barplot(table(data$stroke), names.arg = c("Stroke = 0", "Stroke = 1"), 
+        main = "Stroke Distribution", xlab = "Stroke", ylab = "Count")
+```
+## Analyzing Logistic Regression and Random Forest (RF)
+
+Loop for comparing RF and Logistic regression
+```{r}
+n=20
+N = nrow(data)
+log_misclass_rate <- vector(mode = "numeric", length = n)
+rf_misclass_rate <- vector(mode = "numeric", length = n)
+log_auc <- vector(mode = "numeric", length = n)  
+rf_auc <- vector(mode = "numeric", length = n) 
+for (i in 1:n){
+  set.seed(i)
+  index <- sample(1:N, size = N*.7, replace = F)
+  train_x <- data[index, 1:10]
+  test_x <- data[-index, 1:10]
+  train_y <- data[index, 11]
+  test_y <- data[-index, 11]
+  train <- data[index,]
+  test <- data[-index,]
+  logitmodel <- glm(stroke ~., family = binomial(link = logit), data = train)
+  
+  pred_logitmod <- predict(logitmodel, newdata = test, type = "response")
+  log_predicted_class <- ifelse(pred_logitmod > 0.5, 1, 0)
+  log_predicted_class <- factor(log_predicted_class, levels = c(0, 1))
+  
+  log_error <- table(actual = test_y, predicted = log_predicted_class)
+
+  log_misclass_rate[i] <- 1-sum(diag(log_error))/sum(log_error)
+  
+  rf_model <- randomForest(stroke~.,data = train, xtest = test_x,
+                     ytest=test_y,ntree=300, keep.forest = TRUE)
+  rf_predicted_class <- rf_model$test$predicted
+  rf_error <- table(actual = test_y, predicted = rf_predicted_class)
+  rf_misclass_rate[i] <- 1-sum(diag(rf_error))/sum(rf_error)
+ 
+  log_auc[i] <- auc(roc(log_predicted_class, test_y))
+  rf_auc[i] <- auc(roc(rf_predicted_class,test_y))
+}
+
+```
+
+
+Summary Results 
+```{r}
+results_misclass = data.frame(Log_Error = log_misclass_rate, RF_Error = rf_misclass_rate)
+results_auc = data.frame(Log_AUC = log_auc, RF_AUC = rf_auc)
+summary_results_misclass=describe(results_misclass)
+summary_results_auc = describe(results_auc)
+```
+
+Random forest and Logistic regression displayed similar misclassification rates; however, we noticed most of the data was stroke=0. Therefore, misclassification rate is not good for gauging the performance of each prediction model. AUC scores from ROC must be used to determine the accuracy of each model.
+
+
+
+When ntree=200, the AUC score for Random Forest almost equivalent to the logistic regression AUC score, which is about 0.5. RF actually does a bit worse than logistic regression. Even when I increase ntree to 400 and 1000, the Auc score for RF doesn't increase.
+
+
+
+Graphing AUC of RF and Log
+```{r}
+log_spec <- specificity(log_predicted_class,test_y)$measure
+log_sens <- sensitivity(log_predicted_class,test_y)$measure
+rf_spec <- specificity(rf_predicted_class,test_y)$measure
+rf_sens <- sensitivity(rf_predicted_class,test_y)$measure
+plot(1-log_spec,log_sens, xlab = "1-Specificity", ylab = "Sensitivity", type = "l", col = "red", lwd = 2)
+lines(1-rf_spec, rf_sens, col = "blue", lty = 2, lwd = 2)
+```
+
+Variable importance
+```{r}
+varImpPlot(rf_model, sort = T)
+summary(logitmodel)
+
+par(mfrow=c(1,2))
+varImpPlot(rf_model, sort = T)
+importance_scores <- varImp(logitmodel)
+importance_df <- data.frame(Variable = rownames(importance_scores),
+                            Importance = importance_scores$Overall)
+importance_df <- importance_df[order(importance_df$Importance, decreasing = TRUE), ]
+ggplot(importance_df, aes(x = reorder(Variable, Importance), y = Importance)) +
+  geom_bar(stat = "identity", fill = "skyblue") +
+  coord_flip() +
+  labs(title = "Variable Importance for GLM",
+       x = "Variables",
+       y = "Importance") +
+  theme_minimal()
+```
+
+## Looking into MatchIt Package 
+
+MatchIt is a R package used to address issues when you have an unbalanced dataset by calculating propensity score. Propensity score is a method used to balance explanatory variables between treatment (stroke = 1) and control (stroke = 0) groups, reducing bias and enabling more valid causal inferences in observational studies.
+Propensity scores are calculated using logistic regression to estimate the probability of being assigned the treatment based on observed explanatory variables. These scores are used for matching or weighting to create balanced treatment and control groups.
+
+First, we're looking at the initial imbalance of the data prior to matching which is why method = NULL. we set distance = "glm" for generalized linear model, which implements logistic regression by default. 
+
+```{r}
+library(MatchIt)
+match <- matchit(stroke ~ ., data = data,
+                 method = NULL, distance = "glm")
+summary(match)
+```
+Values of standardized mean differences and eCDF statistics close to zero and values of variance ratios close to one indicate good balance, and here many of them are far from their ideal values.
+
+Now, we begin by briefly demonstrating 1:1 nearest neighbor (NN) matching by the propensity score, which is appropriate for estimating the average treatment effect in the treated (ATT). One by one, each treated unit is paired with a control unit that has the closest propensity score to it. Any remaining control units are left unmatched and excluded from further analysis.
+```{r}
+match_nn <- matchit(stroke ~ ., data = data,
+                 method = "nearest", distance = "glm")
+match_nn
+summary(match_nn, un = F)
+```
+Visualizing the propensity score
+```{r}
+
+plot(match_nn, type = "jitter", interactive = FALSE)
+plot(match_nn, type = "density", interactive = FALSE,
+     which.xs = ~ gender+age+hypertension+heart_disease+ever_married+work_type+Residence_type+avg_glucose_level+bmi+smoking_status)
+
+```
+Based these plots, I believe nearest neighbor propensity score matching is sufficient in balancing the data.
+
+Just for the heck of it, we’ll try full matching, which matches every treated unit to at least one control. We will see that the full matching actually performed a bit better than the nearest neighbor matching. However,  we do not have a treatment that affects the response variable to measure treatment effect when using full match. We are concerned with balancing the number of stroke = 0 and stroke = 1.
+```{r}
+match_full <- matchit(stroke ~ ., data = data,
+                 method = "full", distance = "glm", link = "logit")
+
+match_full
+summary(match2, un = F)
+
+plot(match_full, type = "jitter", interactive = FALSE)
+plot(match_full, type = "density", interactive = FALSE,
+     which.xs = ~ gender+age+hypertension+heart_disease+ever_married+work_type+Residence_type+avg_glucose_level+bmi+smoking_status)
+plot(summary(match_full))
+plot(summary(match_nn))
+```
+Modeling with matched data
+```{r}
+data_match_nn <- match.data(match_nn)
+data_match_nn <- data_match_nn[, c("stroke", setdiff(names(data_match_nn), "stroke"))]
+dmn <- data_match_nn[,1:11]
+dmn2 <- rbind(dmn,data)
+num_replicated_rows <- sum(duplicated(dmn2))
+k =data.frame(duplicated(dmn2))
+df <- dmn2[1:407, ]
+d <- rbind(df,dmn)
+
+n=20
+nn = nrow(data_match_nn)
+nn_log_misclass_rate <- vector(mode = "numeric", length = n)
+nn_rf_misclass_rate <- vector(mode = "numeric", length = n)
+nn_log_auc <- vector(mode = "numeric", length = n)  
+nn_rf_auc <- vector(mode = "numeric", length = n) 
+for (i in 1:n){
+  set.seed(i)
+index_nn <- sample(1:nn, size = nn*.7, replace = F)
+  nn_train_x <- data_match_nn[index_nn, 2:11]
+  nn_test_x <- data_match_nn[-index_nn, 2:11]
+  nn_train_y <- data_match_nn[index_nn, 1]
+  nn_test_y <- data_match_nn[-index_nn, 1]
+  nn_train <- data_match_nn[index_nn, 1:11]
+  nn_test <- data_match_nn[-index_nn, 1:11]
+  
+nn_log <- glm(stroke ~., family = binomial(link = logit), data = nn_train)
+summary(nn_log)
+#nn_test$subclass <- factor(nn_test$subclass, levels = levels(nn_log$subclass))
+
+nn_pred_logitmod <- predict(nn_log, newdata = nn_test, type = "response")
+  nn_log_predicted_class <- ifelse(nn_pred_logitmod > 0.5, 1, 0)
+  nn_log_predicted_class <- factor(nn_log_predicted_class, levels = c(0, 1))
+  
+  nn_log_error <- table(actual = nn_test_y, predicted = nn_log_predicted_class)
+
+  nn_log_misclass_rate[i] <- 1-sum(diag(nn_log_error))/sum(nn_log_error)
+  nn_log_auc[i] <- auc(roc(nn_log_predicted_class, nn_test_y))
+  
+   nn_rf_model <- randomForest(stroke~.,data = nn_train, xtest = nn_test_x,
+                     ytest=nn_test_y,ntree=300, keep.forest = TRUE)
+  nn_rf_predicted_class <- nn_rf_model$test$predicted
+  nn_rf_error <- table(actual = nn_test_y, predicted = nn_rf_predicted_class)
+  nn_rf_misclass_rate[i] <- 1-sum(diag(nn_rf_error))/sum(nn_rf_error)
+ 
+  nn_rf_auc[i] <- auc(roc(nn_rf_predicted_class,nn_test_y))
+}
+varImpPlot(nn_rf_model, sort = T)
+
+```
+
+```{r}
+nn_results_misclass = data.frame(Log_Error = nn_log_misclass_rate, RF_Error = nn_rf_misclass_rate)
+nn_results_auc = data.frame(Log_AUC = nn_log_auc, RF_AUC = nn_rf_auc)
+nn_summary_results_misclass=describe(nn_results_misclass)
+nn_summary_results_auc = describe(nn_results_auc)
+```
+
+
+```{r}
+dmn <- data_match_nn[,1:11]
+dmn2 <- rbind(dmn,data)
+num_replicated_rows <- sum(duplicated(dmn2))
+duplicated(dmn2)
+df <- dmn2[1:400, ]
+d <- rbind(df,dmn)
+
+data_match_nn <- match.data(match_nn)
+data_match_nn <- data_match_nn[, c("stroke", setdiff(names(data_match_nn), "stroke"))]
+nn = nrow(d)
+set.seed(1)
+index_nn <- sample(1:nn, size = nn*.7, replace = F)
+  nn_train_x <- data_match_nn[index_nn, 2:14]
+  nn_test_x <- data_match_nn[-index_nn, 2:14]
+  nn_train_y <- data_match_nn[index_nn, 1]
+  nn_test_y <- data_match_nn[-index_nn, 1]
+  nn_train <- d[index_nn,]
+  nn_test <- d[-index_nn,]
+  
+nn_log <- glm(stroke ~., family = binomial(link = logit), data = nn_train)
+#nn_test$subclass <- factor(nn_test$subclass, levels = levels(nn_log$subclass))
+
+nn_pred_logitmod <- predict(nn_log, newdata = nn_test, type = "response")
+  nn_log_predicted_class <- ifelse(nn_pred_logitmod > 0.5, 1, 0)
+  nn_log_predicted_class <- factor(nn_log_predicted_class, levels = c(0, 1))
+  
+  nn_log_error <- table(actual = nn_test$stroke, predicted = nn_log_predicted_class)
+
+  nn_log_misclass_rate <- 1-sum(diag(nn_log_error))/sum(nn_log_error)
+  nn_log_auc <- auc(roc(nn_log_predicted_class, nn_test_y))
+
+```
+
+What I tried: log of full and nn with the extra matched data column, and the auc score was 0.5 for both.
+Removing the extra matched column made the variables in regression with nn not significant.
+Adding 400 unmatched observation to the matched wasnt able to compute nn_log_auc bc little observation and nn_log_misclass_rate=0.5203
+
+
+```{r}
+data_match_full <- match.data(match_full)
+data_match_full <- data_match_full[, c("stroke", setdiff(names(data_match_full), "stroke"))]
+index <- sample(1:N, size = N*.7, replace = F)
+  full_train_x <- data_match_full[index, 2:14]
+  full_test_x <- data_match_full[-index, 2:14]
+  full_train_y <- data_match_full[index, 1]
+  full_test_y <- data_match_full[-index, 1]
+  full_train <- data_match_full[index,]
+  full_test <- data_match_full[-index,]
+  
+full_log <- glm(stroke ~., family = binomial(link = logit), data = full_train, weights = weights)
+full_test$subclass <- factor(full_test$subclass, levels = levels(full_log$subclass))
+
+full_pred_logitmod <- predict(full_log, newdata = full_test, type = "response")
+  full_log_predicted_class <- ifelse(full_pred_logitmod > 0.5, 1, 0)
+  full_log_predicted_class <- factor(full_log_predicted_class, levels = c(0, 1))
+  
+  full_log_error <- table(actual = full_test_y, predicted = full_log_predicted_class)
+
+  full_log_misclass_rate <- 1-sum(diag(full_log_error))/sum(full_log_error)
+  full_log_auc <- auc(roc(full_log_predicted_class, full_test_y))
+```
+
+## Prevelance
+
+In the United States, each year 795,000 suffer from a stroke. If we divide that number by the US population, there is about a 0.24% chance of US citizens getting a stroke per year. The test set contains `r nrow(test)` observations. If we multiply the number of rows by the prevalence, it will give us the number of stroke LG and RF should predict the test set to have which is about 3-4 stroke patients.
+```{r}
+pred_logitmod <- predict(logitmodel, newdata = test, type = "response")
+log_sorted_indices <- order(-pred_logitmod)
+us_stroke = 795000/332915073
+prevelance = round((nrow(test))*us_stroke)
+log_top_prob <- pred_logitmod[log_sorted_indices[1:prevelance]]
+log_top_rows <- test[log_sorted_indices[1:prevelance], ] #top rows in the test set that have highest probability of getting stroke                                                              based on LG predictions
+l = nrow(log_top_rows)
+log_prob_top_hypertension = nrow(log_top_rows[log_top_rows$hypertension == "1",])/l 
+log_prob_top_smoke = nrow(log_top_rows[log_top_rows$smoking_status == "smokes",])/l
+log_prob_top_age = nrow(log_top_rows[log_top_rows$age >= 70,])/l
+log_prob_top_bmi = nrow(log_top_rows[log_top_rows$bmi >= 25,])/l
+log_prob_top_gluc = nrow(log_top_rows[log_top_rows$avg_glucose_level > 180,])/l
+
+stroke = data[data$stroke == "1",]
+stroke_num = nrow(stroke)
+prob_top_hypertension = nrow(stroke[stroke$hypertension == "1",])/stroke_num
+prob_top_smoke = nrow(stroke[stroke$smoking_status == "smokes",])/stroke_num 
+prob_top_age = nrow(stroke[stroke$age >= 70,])/stroke_num
+prob_top_bmi = nrow(stroke[stroke$bmi >= 25,])/stroke_num
+prob_top_gluc = nrow(stroke[stroke$avg_glucose_level > 180,])/stroke_num
+
+nstroke = data[data$stroke == "0",]
+nstroke_num = nrow(nstroke)
+nprob_top_hypertension = nrow(nstroke[stroke$hypertension == "1",])/nstroke_num
+nprob_top_smoke = nrow(nstroke[nstroke$smoking_status == "smokes",])/nstroke_num 
+nprob_top_age = nrow(nstroke[nstroke$age >= 70,])/nstroke_num
+nprob_top_bmi = nrow(nstroke[stroke$bmi >= 25,])/nstroke_num
+nprob_top_gluc = nrow(nstroke[stroke$avg_glucose_level > 180,])/nstroke_num
+
+rf_model <- randomForest(stroke~.,data = train, xtest = test_x,
+                     ytest=test_y,ntree=300, keep.forest = TRUE)
+rf_prob <- data.frame(rf_model$test$votes)
+rf_prob <- rf_prob$X1
+rf_sorted_indices <- order(-rf_prob)
+rf_top_prob <- rf_prob[rf_sorted_indices[1:prevelance]]
+rf_top_rows <- test[rf_sorted_indices[1:prevelance], ]
+r = nrow(rf_top_rows)
+rf_prob_top_hypertension = nrow(rf_top_rows[rf_top_rows$hypertension == "1",])/r 
+rf_prob_top_smoke = nrow(rf_top_rows[rf_top_rows$smoking_status == "smokes",])/r
+rf_prob_top_age = nrow(rf_top_rows[rf_top_rows$age >= 70,])/r
+rf_prob_top_bmi = nrow(rf_top_rows[rf_top_rows$bmi >= 25,])/r
+rf_prob_top_gluc = nrow(rf_top_rows[rf_top_rows$avg_glucose_level > 180,])/r
+
+rf_stroke_pred <- sum(rf_predicted_class == 1)
+rf_prev_comparison = c(rf_stroke_pred,prevelance)
+log_stroke_pred <- sum(log_predicted_class == 1)
+log_prev_comparison = c(log_stroke_pred, prevelance)
+
+comparison <- data.frame(
+  Data_NoStroke = c(nprob_top_hypertension,nprob_top_smoke,nprob_top_age,nprob_top_bmi,nprob_top_gluc),
+  Data_Stroke = c(prob_top_hypertension,prob_top_smoke,prob_top_age,prob_top_bmi,prob_top_gluc),
+  Logistic = c(log_prob_top_hypertension,log_prob_top_smoke,log_prob_top_age,log_prob_top_bmi,log_prob_top_gluc),
+  RF = c(rf_prob_top_hypertension,rf_prob_top_smoke,rf_prob_top_age,rf_prob_top_bmi,rf_prob_top_gluc)
+) # compares the top 4% of the highest probability of getting stroke in logistic and RF to characteristics of those that had and didnt have stroke in the data
+rownames(comparison) <- c("Hypertension", "Smokes", "Age>=70", "BMI>=25", "GlucLevel>180")
+
+comparison
+```
+

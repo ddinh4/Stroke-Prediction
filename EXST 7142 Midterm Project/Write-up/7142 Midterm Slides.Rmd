@@ -1,0 +1,539 @@
+---
+title: "Stroke Prediction"
+author: "Dina, Jalen, Marcellus"
+date: '2023-10-23'
+output: slidy_presentation
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+## Packages Needed
+
+Here are the packages used in this analysis
+```{r, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(boot)
+library(randomForest)
+library(psych)
+library(AUC)
+library(MASS)
+library(car)
+```
+
+## Data Description
+
+In this document, we will describe the results of the analysis for the Stroke Prediction dataset from the website [link]https://www.kaggle.com/datasets/fedesoriano/stroke-prediction-dataset/data. Kaggle is an online platform and community that focuses on data science, machine learning, and artificial intelligence by providing access to data, tools, and a platform for collaboration. The Stroke Prediction Dataset is used for research and analysis to understand the factors contributing to strokes and to build predictive models for identifying individuals at risk of experiencing a stroke. It includes qualitative variables like a person’s marital status, and quantitative variables like body mass index (BMI), for each individual (1). The data consists of 5,110 observations with 12 quantitative and qualitative variables.
+The 12 variables are the following: 
+
+1. ID: An anonymous identifier for each individual.
+
+2. Gender: The gender of the individual (e.g., Male, Female, Other).
+
+3. Age: The age of the individual.
+
+4. Hypertension: Indicates whether the individual has hypertension.
+
+5. Heart Disease: Indicates whether the individual has heart disease.
+
+6. Marital Status: The marital status of the individual (e.g., Married or Single).
+
+7. Work Type: The type of work the individual is engaged in.
+
+8. Residence Type: Whether the individual lives in an urban or rural area.
+9. Average Glucose Level: The average glucose level of the individual.
+10. BMI (Body Mass Index): The Body Mass Index of the individual.
+11. Smoking Status: The smoking status of the individual (e.g., Smoker, Non-smoker, etc.).
+12. Stroke: The binary response variable, indicating whether the individual had a stroke (0 = No, 1 = Yes).
+
+
+## Importing and Cleaning the Data
+
+ID has been removed for analysis purposes.
+Most of the qualitative variables were re-coded to be binary. Given the large sample size of the data, missing values were removed. 
+We also changed the categorical data to be factors and not numeric since most are binary. None of the categorical variables have high levels for further evaluation. The observation for gender = Other, was removed for this data. 
+```{r}
+data <- read.csv("../Data/Raw/healthcare-dataset-stroke-data.csv")
+
+data <- data %>%
+              drop_na()  %>% 
+    #select(!(id)) %>%
+    mutate(gender = as.factor(gender)) %>%
+    mutate(Residence_type = as.factor(Residence_type)) %>%
+    mutate(ever_married = as.factor(ever_married))%>%
+    mutate(work_type = as.factor(work_type)) %>%
+    mutate(smoking_status = as.factor(smoking_status))%>%
+    mutate(heart_disease = as.factor(heart_disease))%>%
+    mutate(hypertension = as.factor(hypertension))%>%
+    mutate(stroke = as.factor(stroke))
+
+                  
+data<- data[data$gender != "Other", ]
+
+data$gender <- droplevels(data$gender)
+data <- data[, -1]
+str(data)
+```
+
+
+## Analyzing the Dataset
+
+### Correlation of Numeric Explanatory Variables, Distribution of Response Variable, and Outliers in the Dataset
+
+```{r}
+cor(data[sapply(data,is.numeric)],use = "pairwise.complete.obs")
+barplot(table(data$stroke), names.arg = c("Stroke = 0", "Stroke = 1"), 
+        main = "Stroke Distribution", xlab = "Stroke", ylab = "Count")
+boxplot(data)
+```
+We can see that none of the numeric explanatory variables are highly correlated with each other. However, there is a high imbalance between stroke patients and non-stroke patients.We can also see many outliers in the average glucose level and BMI.
+
+### Histogram of BMI
+
+```{r}
+ggplot(data, aes(x = bmi, fill = stroke)) +
+  geom_histogram(binwidth = 3) +
+  labs(x = "BMI", y = "Frequency")
+```
+BMI by stroke status
+
+```{r}
+ggplot(data, aes(x = bmi, fill = gender)) +
+  geom_histogram(binwidth = 3) +
+  facet_wrap(~stroke, scales = "free") +
+  labs(x = "BMI", y = "Frequency")
+```
+Here is a histogram of BMI by stroke status overlapped by gender. There does not seem to be a relationship between BMI and stroke status for males and females.
+
+```{r}
+ggplot(data, aes(x = bmi, fill = hypertension)) +
+  geom_histogram(binwidth = 3) +  # Adjust binwidth and fill color as needed
+  facet_wrap(~stroke, scales = "free") +  # Facet by binomial_var
+  labs(x = "BMI", y = "Frequency")
+```
+Histogram of BMI by stroke status overlapped by hypertension. There doesn't look to be an obvious relationship between BMI and stroke for people that have hypertension and don't.
+
+```{r}
+ggplot(data, aes(x = bmi, fill = heart_disease)) +
+  geom_histogram(binwidth = 3) +  # Adjust binwidth and fill color as needed
+  facet_wrap(~stroke, scales = "free") +  # Facet by binomial_var
+  labs(x = "BMI", y = "Frequency")
+```
+Histogram of BMI by stroke status overlapped by heart disease. Data doesn't seem to show a difference in stroke status by heart disease.
+
+```{r}
+ggplot(data, aes(x = bmi, fill = ever_married)) +
+  geom_histogram(binwidth = 3) +  # Adjust binwidth and fill color as needed
+  facet_wrap(~stroke, scales = "free") +  # Facet by binomial_var
+  labs(x = "BMI", y = "Frequency")
+```
+Histogram of BMI by stroke status overlapped by ever married. Marriage doesn't seem to differ between people who had strokes or not.
+
+```{r}
+ggplot(data, aes(x = bmi, fill = Residence_type)) +
+  geom_histogram(binwidth = 3) +  # Adjust binwidth and fill color as needed
+  facet_wrap(~stroke, scales = "free") +  # Facet by binomial_var
+  labs(x = "BMI", y = "Frequency")
+```
+Histogram of BMI by stroke status overlapped by Residence type. There doesn't seem to be much of a difference between the two.
+
+```{r}
+ggplot(data, aes(x = bmi, fill = work_type)) +
+  geom_histogram(binwidth = 3) +  # Adjust binwidth and fill color as needed
+  facet_wrap(~stroke, scales = "free") +  # Facet by binomial_var
+  labs(x = "BMI", y = "Frequency")
+```
+Histogram of BMI by stroke status overlapped by work type. 
+
+```{r}
+ggplot(data, aes(x = bmi, fill = smoking_status)) +
+  geom_histogram(binwidth = 3) +  # Adjust binwidth and fill color as needed
+  facet_wrap(~stroke, scales = "free") +  # Facet by binomial_var
+  labs(x = "BMI", y = "Frequency")
+```
+Histogram of BMI by stroke status overlapped by smoking status.
+
+
+### Histogram of Average Glucose Levels
+
+```{r}
+ggplot(data, aes(x = avg_glucose_level, fill = stroke)) +
+  geom_histogram(binwidth = 3) +
+  labs(x = "Average Glucose Level", y = "Frequency")
+```
+Histogram of average glucose level by stroke status where not much difference can be seen between the average glucose level by stroke status
+
+```{r}
+ggplot(data, aes(x = avg_glucose_level, fill = gender)) +
+  geom_histogram(binwidth = 5) +  # Adjust binwidth and fill color as needed
+  facet_wrap(~stroke, scales = "free") +  # Facet by binomial_var
+  labs(x = "Average Glucose Level", y = "Frequency")
+```
+Histogram of average glucose level by stroke status overlapped by gender. Hard to get anything from this when the stroke=1 histogram looks more discrete, but not much difference.
+
+```{r}
+ggplot(data, aes(x = avg_glucose_level, fill = hypertension)) +
+  geom_histogram(binwidth = 5) +  # Adjust binwidth and fill color as needed
+  facet_wrap(~stroke, scales = "free") +  # Facet by binomial_var
+  labs(x = "Average Glucose Level", y = "Frequency")
+```
+Histogram of average glucose level by stroke status overlapped by hypertension, but not much difference.
+
+```{r}
+ggplot(data, aes(x = avg_glucose_level, fill = heart_disease)) +
+  geom_histogram(binwidth = 5) +  # Adjust binwidth and fill color as needed
+  facet_wrap(~stroke, scales = "free") +  # Facet by binomial_var
+  labs(x = "AVerage Glucose Level", y = "Frequency")
+```
+Histogram of average glucose level by stroke status overlapped by heart disease, but not seeing much difference.
+
+```{r}
+ggplot(data, aes(x = avg_glucose_level, fill = ever_married)) +
+  geom_histogram(binwidth = 5) +  # Adjust binwidth and fill color as needed
+  facet_wrap(~stroke, scales = "free") +  # Facet by binomial_var
+  labs(x = "Average Glucose Level", y = "Frequency")
+```
+Histogram of average glucose level by stroke status overlapped by ever married, but not much difference seen. 
+
+```{r}
+ggplot(data, aes(x = avg_glucose_level, fill = Residence_type)) +
+  geom_histogram(binwidth = 5) +  # Adjust binwidth and fill color as needed
+  facet_wrap(~stroke, scales = "free") +  # Facet by binomial_var
+  labs(x = "Average Glucose Level", y = "Frequency")
+```
+Histogram of average glucose level by stroke status overlapped by Residence type. Hard to see a difference here. 
+
+```{r}
+ggplot(data, aes(x = avg_glucose_level, fill = work_type)) +
+  geom_histogram(binwidth = 5) +  # Adjust binwidth and fill color as needed
+  facet_wrap(~stroke, scales = "free") +  # Facet by binomial_var
+  labs(x = "AVerage Glucose Level", y = "Frequency")
+```
+Histogram of average glucose level by stroke status overlapped by work type.
+
+```{r}
+ggplot(data, aes(x = avg_glucose_level, fill = smoking_status)) +
+  geom_histogram(binwidth = 5) +  # Adjust binwidth and fill color as needed
+  facet_wrap(~stroke, scales = "free") +  # Facet by binomial_var
+  labs(x = "Average Glucose Level", y = "Frequency")
+```
+Histogram of average glucose level by stroke status overlapped by smoking status.
+
+### Histogram of Age
+
+```{r}
+ggplot(data, aes(x = age, fill = stroke)) +
+  geom_histogram(binwidth = 3, position = "dodge")
+```
+Skewed left histogram in terms of age for the stroke patients, seemingly indicating that the age of patients who encountered a stroke is higher than those who did not.
+
+
+## Prediction Models
+
+We decided that Generalized Linear Model and Random Forest are the best prediction models for our dataset.
+
+## Analyzing General Linear Model (GLM) and Random Forest (RF)
+
+Here we have a loop that computes misclassification rates and AUC scores for both GLM and RF 20 times, and each time using a different seed and training and test set.
+```{r}
+n=20
+N = nrow(data)
+log_misclass_rate <- vector(mode = "numeric", length = n)
+rf_misclass_rate <- vector(mode = "numeric", length = n)
+log_auc <- vector(mode = "numeric", length = n)  
+rf_auc <- vector(mode = "numeric", length = n) 
+for (i in 1:n){
+  set.seed(i)
+  index <- sample(1:N, size = N*.7, replace = F)
+  train_x <- data[index, 1:10]
+  test_x <- data[-index, 1:10]
+  train_y <- data[index, 11]
+  test_y <- data[-index, 11]
+  train <- data[index,]
+  test <- data[-index,]
+  logitmodel <- glm(stroke ~., family = binomial(link = logit), data = train)
+  
+  pred_logitmod <- predict(logitmodel, newdata = test, type = "response")
+  log_predicted_class <- ifelse(pred_logitmod > 0.5, 1, 0)
+  log_predicted_class <- factor(log_predicted_class, levels = c(0, 1))
+  
+  log_error <- table(actual = test_y, predicted = log_predicted_class)
+
+  log_misclass_rate[i] <- 1-sum(diag(log_error))/sum(log_error)
+  
+  rf_model <- randomForest(stroke~.,data = train, xtest = test_x,
+                     ytest=test_y,ntree=300, keep.forest = TRUE)
+  rf_predicted_class <- rf_model$test$predicted
+  rf_error <- table(actual = test_y, predicted = rf_predicted_class)
+  rf_misclass_rate[i] <- 1-sum(diag(rf_error))/sum(rf_error)
+ 
+  log_auc[i] <- auc(roc(log_predicted_class, test_y))
+  rf_auc[i] <- auc(roc(rf_predicted_class,test_y))
+}
+
+```
+When ntree=200, the AUC score for Random Forest is almost equivalent to the General Linear Model's AUC score, which is about 0.5. Random Forest actually does a bit worse than General Linear Model. Even when I increase ntree to 400 and 1000, the AUC score for RF doesn't increase.
+
+
+## Summary Results Comparing Predictions of GLM and RF
+
+This shows a table of misclassification rate and AUC score between GLM and RF as well as the summary of them.
+```{r}
+results_misclass = data.frame(Log_Error = log_misclass_rate, RF_Error = rf_misclass_rate)
+results_auc = data.frame(Log_AUC = log_auc, RF_AUC = rf_auc)
+summary_results_misclass=describe(results_misclass)
+summary_results_auc = describe(results_auc)
+results_misclass
+results_auc
+summary_results_misclass
+summary_results_auc
+```
+Random forest and General Linear Model displayed similar misclassification rates; however, we noticed most of the data was stroke=0. Therefore, misclassification rate is not good for gauging the performance of each prediction model. AUC scores from ROC must be used to determine the performance of each model.
+
+
+### Graphing AUC Scores of GLM and RF
+```{r, tidy=TRUE, tidy.opts=list(width.cutoff=60)}
+log_spec <- specificity(log_predicted_class,test_y)$measure
+log_sens <- sensitivity(log_predicted_class,test_y)$measure
+rf_spec <- specificity(rf_predicted_class,test_y)$measure
+rf_sens <- sensitivity(rf_predicted_class,test_y)$measure
+plot(1-log_spec,log_sens, xlab = "1-Specificity", ylab = "Sensitivity", type = "l", col = "red", lwd = 2)
+lines(1-rf_spec, rf_sens, col = "blue", lty = 2, lwd = 2)
+```
+We see that both lines are basically equivelant to the chance line, which is not good!
+
+
+## Variable Importance and Multicollinearity
+
+Let's look at the significant variables for each model and multicollinearity.
+```{r}
+summary(logitmodel)
+vif(logitmodel)
+varImpPlot(rf_model, sort = T)
+```
+Average glucose level, BMI, and age have very high importance in the RF model, whereas, age, hypertension, and average glucose level are highly significant in the GLM model. There's also no multicollinearity issues.
+
+### Partial Dependency Plots
+
+```{r, message=FALSE,warning=FALSE}
+par(mfrow=c(1,2))
+partialPlot(rf_model, train, 'bmi', which.class = '1', 
+            main = "PDP of BMI for Stroke = 1")
+partialPlot(rf_model, train, 'bmi', which.class = '0', 
+            main = "PDP of BMI for Stroke = 0")
+```
+Partial Dependency Plot for BMI, the positive trend in stroke = 1 means that as BMI increases the model is more likely to predict the patient as a stroke patient. 
+
+```{r}
+par(mfrow=c(1,2))
+partialPlot(rf_model, train, 'age', which.class = '1', 
+            main = "PDP of Age for Stroke = 1")
+partialPlot(rf_model, train, 'age', which.class = '0', 
+            main = "PDP of Age for Stroke = 0")
+```
+Partial Dependency Plot for age, the positive trend in stroke = 1 means that as age increases the model is more likely to predict the patient as a stroke patient.
+
+```{r}
+par(mfrow=c(1,2))
+partialPlot(rf_model, train, 'avg_glucose_level', which.class = '1', 
+            main = "PDP for Stroke = 1")
+partialPlot(rf_model, train, 'avg_glucose_level', which.class = '0', 
+            main = "PDP for Stroke = 0")
+```
+Partial Dependency Plot for average glucose level, the positive trend in stroke = 1 means that as average glucose level increases the model is more likely to predict the patient as a stroke patient.
+
+### Density Plots
+
+
+
+```{r, tidy=TRUE, tidy.opts=list(width.cutoff=60)}
+bmi_1 <- density(train$bmi[which(train$stroke=='1')])
+bmi_0 <- density(train$bmi[which(train$stroke=='0')])
+#par(mfrow=c(1,2))
+plot(bmi_1, xlim=range(bmi_1$x,bmi_0$x), ylim=range(bmi_1$y,bmi_0$y), col = "red",
+     main = "Density Plot for BMI on Stroke Status",
+     xlab = "BMI", lwd=2)
+lines(bmi_0, col = "grey", lwd= 2, lty = 2)
+legend("topright", legend=c("stroke = 1", "stroke = 0"), lty = c(1,2), 
+       col = c("red", "grey"), lwd=2)
+```
+We can see that the BMI of stroke patients are a bit larger than non-stroke patients, but there's no clear threshold.
+
+
+
+```{r, tidy=TRUE, tidy.opts=list(width.cutoff=60)}
+gluc_1 <- density(train$avg_glucose_level[which(train$stroke=='1')])
+gluc_0 <- density(train$avg_glucose_level[which(train$stroke=='0')])
+#par(mfrow=c(1,2))
+plot(gluc_1, xlim=range(gluc_1$x,gluc_0$x), ylim=range(0,0.06), col = "red",
+     main = "Density Plot for Avg Glucose Level on Stroke Status",
+     xlab = "Average Glucose Level", lwd=2)
+lines(bmi_0, col = "grey", lwd= 2, lty = 2)
+legend("topright", legend=c("stroke = 1", "stroke = 0"), lty = c(1,2), 
+       col = c("red", "grey"), lwd=2)
+```
+We can see that the average glucose level is a lot lower for non-stroke patients with a clear threshold around 50.
+
+
+
+```{r, tidy=TRUE, tidy.opts=list(width.cutoff=60)}
+age_1 <- density(train$age[which(train$stroke=='1')])
+age_0 <- density(train$age[which(train$stroke=='0')])
+#par(mfrow=c(1,2))
+plot(age_1, xlim=range(age_1$x,age_0$x), ylim=range(0,0.06), col = "red",
+     main = "Density Plot for Age on Stroke Status",
+     xlab = "Age", lwd=2)
+lines(bmi_0, col = "grey", lwd= 2, lty = 2)
+legend("topright", legend=c("stroke = 1", "stroke = 0"), lty = c(1,2), 
+       col = c("red", "grey"), lwd=2)
+```
+Stroke patients tend to be older in age than non-stroke patient with a threshold around age 45 which can clearly be seen in the density plot.
+
+## Looking into MatchIt
+
+After seeing the discrepancy between the misclassification rate and AUC score of both General Linear Model and RF model, we noticed that our dataset is severely imbalanced. There were only 209 stroke patients out of 4,908 patients which is 4.26%. To address this issue, we tried the nearest neighbor matching method using the MatchIt package in R.
+- MatchIt is used to address issues when you have an unbalanced dataset by calculating propensity score (2). Propensity score is a method used to balance explanatory variables between treatment (stroke = 1) and control (stroke = 0) groups, reducing bias and enabling more valid causal inferences in observational studies.
+- Propensity scores are calculated using General Linear Model to estimate the probability of being assigned the treatment based on observed explanatory variables. These scores are used for matching or weighting to create balanced treatment and control groups.
+
+
+- First, let's look at the initial imbalance of the data prior to matching which is why method = NULL. We set distance = "glm" for generalized linear model, which implements General Linear Model by default. 
+```{r,message=FALSE,warning=FALSE}
+library(MatchIt)
+match <- matchit(stroke ~ ., data = data,
+                 method = NULL, distance = "glm")
+summary(match)
+```
+Values of standardized mean differences and eCDF statistics close to zero and values of variance ratios close to one indicate good balance, and here many of them are far from their ideal values.
+
+### Nearest Neighbor Matching Method
+
+Now, we begin by briefly demonstrating 1:1 nearest neighbor (NN) matching by the propensity score, which is appropriate for estimating the average treatment effect in the treated (ATT). One by one, each treated unit is paired with a control unit that has the closest propensity score to it. Any remaining control units are left unmatched and excluded from further analysis.
+```{r, tidy=TRUE, tidy.opts=list(width.cutoff=60)}
+match_nn <- matchit(stroke ~ ., data = data,
+                 method = "nearest", distance = "glm")
+match_nn
+summary(match_nn, un = F)
+```
+
+### Visualizing the Propensity Score
+
+```{r, tidy=TRUE, tidy.opts=list(width.cutoff=60)}
+plot(match_nn, type = "jitter", interactive = FALSE)
+plot(match_nn, type = "density", interactive = FALSE,
+     which.xs = ~ gender+age+hypertension+heart_disease+ever_married+work_type+Residence_type+avg_glucose_level+bmi+smoking_status)
+```
+Based these plots, I believe nearest neighbor propensity score matching is sufficient in balancing the data.
+
+## Modeling with the Matched Data
+
+Because matching adds three extra columns (weights, distance, subclass) to the data when computing propensity score, those columns were removed in the regression and prediction analysis.
+```{r}
+data_match_nn <- match.data(match_nn)
+data_match_nn <- data_match_nn[, c("stroke", setdiff(names(data_match_nn), "stroke"))]
+
+n=3
+nn = nrow(data_match_nn)
+nn_log_misclass_rate <- vector(mode = "numeric", length = n)
+nn_rf_misclass_rate <- vector(mode = "numeric", length = n)
+nn_log_auc <- vector(mode = "numeric", length = n)  
+nn_rf_auc <- vector(mode = "numeric", length = n) 
+for (i in 1:n){
+  set.seed(i)
+index_nn <- sample(1:nn, size = nn*.7, replace = F)
+  nn_train_x <- data_match_nn[index_nn, 2:11]
+  nn_test_x <- data_match_nn[-index_nn, 2:11]
+  nn_train_y <- data_match_nn[index_nn, 1]
+  nn_test_y <- data_match_nn[-index_nn, 1]
+  nn_train <- data_match_nn[index_nn, 1:11]
+  nn_test <-data_match_nn[-index_nn, 1:11]
+  
+nn_log <- glm(stroke ~., family = binomial(link = logit), data = nn_train)
+summary(nn_log)
+
+nn_pred_logitmod <- predict(nn_log, newdata = nn_test, type = "response")
+  nn_log_predicted_class <- ifelse(nn_pred_logitmod > 0.5, 1, 0)
+  nn_log_predicted_class <- factor(nn_log_predicted_class, levels = c(0, 1))
+  
+  nn_log_error <- table(actual = nn_test_y, predicted = nn_log_predicted_class)
+
+  nn_log_misclass_rate[i] <- 1-sum(diag(nn_log_error))/sum(nn_log_error)
+  nn_log_auc[i] <- auc(roc(nn_log_predicted_class, nn_test_y))
+  
+   nn_rf_model <- randomForest(stroke~.,data = nn_train, xtest = nn_test_x,
+                     ytest=nn_test_y,ntree=300, keep.forest = TRUE)
+  nn_rf_predicted_class <- nn_rf_model$test$predicted
+  nn_rf_error <- table(actual = nn_test_y, predicted = nn_rf_predicted_class)
+  nn_rf_misclass_rate[i] <- 1-sum(diag(nn_rf_error))/sum(nn_rf_error)
+ 
+  nn_rf_auc[i] <- auc(roc(nn_rf_predicted_class,nn_test_y))
+}
+
+```
+
+
+## Summary Results Comparing Predictions of GLM and RF After Matching
+
+```{r}
+nn_results_misclass = data.frame(Log_Error = nn_log_misclass_rate, RF_Error = nn_rf_misclass_rate)
+nn_results_auc = data.frame(Log_AUC = nn_log_auc, RF_AUC = nn_rf_auc)
+nn_summary_results_misclass=describe(nn_results_misclass)
+nn_summary_results_auc = describe(nn_results_auc)
+nn_results_misclass
+nn_results_auc
+nn_summary_results_misclass
+nn_summary_results_auc
+```
+Nearest neighbor method matched 418 observations. General Linear Model and RF was performed on the matched data. General Linear Model showed that none of the explanatory variables were significant aside from age. General Linear Model performance were misclassification score = `r mean(nn_log_misclass_rate)` and AUC score = `r mean(nn_log_auc)`. RF performance were misclassification score = `r mean(nn_rf_misclass_rate)` and AUC score = `r mean(nn_rf_auc)`.  Both models performed very poorly. 
+
+
+## Analyzing Based on Prevalence 
+
+In the United States, each year 795,000 suffer from a stroke (3). If we divide that number by the US population, there is about a 0.24% chance of US citizens getting a stroke per year (4). The test set contains `r nrow(test)` observations. If we multiply the number of rows by the prevalence, it will give us the number of stroke GLM and RF should predict the test set to have which is about 3-4 stroke patients.
+```{r, tidy=TRUE, tidy.opts=list(width.cutoff=60)}
+log_sorted_indices <- order(-pred_logitmod)
+us_stroke = 795000/332915073
+prevelance = round((nrow(test))*us_stroke)
+log_top_prob <- pred_logitmod[log_sorted_indices[1:prevelance]]
+print(paste("The highest probability of stroke patient using GLM is", paste(log_top_prob, collapse = " and ")))
+
+rf_prob <- data.frame(rf_model$test$votes)
+rf_prob <- rf_prob$X1
+rf_sorted_indices <- order(-rf_prob)
+rf_top_prob <- rf_prob[rf_sorted_indices[1:prevelance]]
+print(paste("The highest probability of stroke patient using RF is", paste(rf_top_prob, collapse = " and ")))
+
+
+rf_stroke_pred <- sum(rf_predicted_class == 1)
+rf_prev_comparison = c(rf_stroke_pred,prevelance)
+log_stroke_pred <- sum(log_predicted_class == 1)
+log_prev_comparison = c(log_stroke_pred, prevelance)
+print(paste("The number of predicted stroke using RF vs prevalence of stroke in test set is", paste(rf_prev_comparison, collapse = " vs ")))
+print(paste("The number of predicted stroke using GLM vs prevalence of stroke in test set is", paste(log_prev_comparison, collapse = " vs ")))
+```
+RF predicted 1 stroke patient and GLM predicted none when hypothetically there should have been 3-4, which is not a sign of good model accuracy and performance.
+
+
+## Model Performance Based on Variable Reduction for GLM
+
+Using stepAIC to create the reduced model, the reduced model was analyzed based on prediction performance.
+```{r}
+reduced_log <- stepAIC(logitmodel, direction = "both")
+r_log_pred <- predict(reduced_log, newdata = test, type = "response")
+r_log_pred_class <- ifelse(r_log_pred > 0.5, 1,0)
+length(r_log_pred_class[r_log_pred_class == "1"])
+r_log_auc <- auc(roc(r_log_pred_class,test_y))
+```
+Because the reduced GLM model predicted `r length(r_log_pred_class[r_log_pred_class == "1"])` stroke patients and the AUC score is `r r_log_auc`, the reduced GLM doesn't really perform better than the full model.
+
+## Conclusion
+
+Random Forest and General Linear Model are two of the more common and favorable models when dealing with binary classification predictions. In this analysis, we saw how poorly both of them performed on this dataset. This makes us believe that because the prevalence of having a stroke is so rare, a much larger dataset other/more explanatory variables must be used in order for RF or GLM to spot the tiniest differences between stroke patients and non-stroke patients. When using larger or more complex datasets, RF is probably the better option. However, on small to moderately sized dataset, GLM is easier to interpret and likely to perform just as well. 
+
+
+## References
+
+1. Fedesoriano. “Stroke Prediction Dataset.” Kaggle, 26 Jan. 2021, www.kaggle.com/datasets/fedesoriano/stroke-prediction-dataset/data. 
+2. Greifer, Noah. Matchit: Getting Started, 12 Oct. 2023, cran.r-project.org/web/packages/MatchIt/vignettes/MatchIt.html. 
+3. Jose Vega MD, PhD. “Interesting and Surprising Facts and Statistics about Stroke.” Verywell Health, Verywell Health, 6 Apr. 2022,    www.verywellhealth.com/facts-and-statistics-about-stroke-3146382. 
+4. “U.S. Population 1950-2023.” MacroTrends, www.macrotrends.net/countries/USA/united-states/population#:~:text=The%20current%20population%20of%20U.S.%20in%202021%20is,2019%20was%20329%2C064%2C917%2C%20a%200.6%25%20increase%20from%202018. Accessed 22 Oct. 2023. 
